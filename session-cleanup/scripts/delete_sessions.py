@@ -21,6 +21,95 @@ import argparse
 from pathlib import Path
 
 
+def validate_session_path(session_path: Path) -> tuple[bool, str]:
+    """
+    验证会话路径安全性
+    返回: (是否有效, 错误信息)
+    """
+    # 1. 路径必须是绝对路径
+    if not session_path.is_absolute():
+        return False, "路径必须是绝对路径"
+    
+    # 2. 获取基础目录
+    kimi_dir = get_kimi_dir()
+    sessions_base = (kimi_dir / "sessions").resolve()
+    
+    # 3. 解析真实路径（消除符号链接），处理不存在的路径
+    try:
+        real_path = session_path.resolve()
+        real_base = sessions_base.resolve()
+    except (OSError, ValueError) as e:
+        return False, f"路径解析失败: {e}"
+    
+    # 4. 必须是真实目录，不能是符号链接本身
+    try:
+        if session_path.exists() and session_path.resolve() != session_path:
+            # 如果是链接，检查是否指向预期范围内
+            try:
+                real_path.relative_to(real_base)
+            except ValueError:
+                return False, "拒绝访问符号链接指向的外部目录"
+    except OSError:
+        pass
+    
+    # 5. 路径必须在 sessions 目录下
+    try:
+        real_path.relative_to(real_base)
+    except ValueError:
+        return False, f"路径超出允许范围: {real_path} 不在 {real_base} 下"
+    
+    # 6. 路径深度验证：必须是 sessions/<32位hash>/<session_id>
+    try:
+        relative = real_path.relative_to(real_base)
+        parts = relative.parts
+        
+        if len(parts) != 2:
+            return False, f"路径格式错误：期望 2 层目录，实际 {len(parts)} 层"
+        
+        hash_dir, session_id = parts
+        
+        # hash 必须是 32 位十六进制（MD5）
+        if len(hash_dir) != 32:
+            return False, f"hash 目录长度错误: {len(hash_dir)} (期望 32)"
+        
+        if not all(c in '0123456789abcdef' for c in hash_dir.lower()):
+            return False, "hash 目录包含非法字符"
+        
+        # session_id 基本格式检查（不能包含路径分隔符）
+        if '/' in session_id or '\\' in session_id or '..' in session_id:
+            return False, "session ID 包含非法字符"
+        
+    except Exception as e:
+        return False, f"路径验证异常: {e}"
+    
+    return True, ""
+
+
+def get_extended_path(path: Path) -> Path:
+    r"""
+    Windows 长路径处理
+    超过 240 字符时添加 \\?\ 前缀绕过 MAX_PATH 限制
+    """
+    if sys.platform != "win32":
+        return path
+    
+    # 已经是扩展路径则不再处理
+    path_str = str(path)
+    if path_str.startswith("\\\\?\\"):
+        return path
+    
+    # 必须是绝对路径才能添加前缀
+    abs_path = path.resolve()
+    abs_str = str(abs_path)
+    
+    if len(abs_str) > 240:
+        # 使用 \\?\ 前缀启用长路径支持
+        extended = "\\\\?\\" + abs_str
+        return Path(extended)
+    
+    return abs_path
+
+
 def get_kimi_dir() -> Path:
     """获取跨平台的 kimi 数据目录"""
     share_dir = os.environ.get("KIMI_SHARE_DIR")
@@ -40,7 +129,7 @@ def format_size(size_bytes: int) -> str:
 
 def delete_session(session_path: Path) -> dict:
     """
-    跨平台删除会话目录
+    跨平台删除会话目录（带安全验证）
     使用 shutil.rmtree 支持 Windows/macOS/Linux
     删除后会清理空的工作目录（hash目录）
     """
@@ -51,16 +140,23 @@ def delete_session(session_path: Path) -> dict:
         "parent_removed": False
     }
     
+    # 安全验证
+    is_valid, error_msg = validate_session_path(session_path)
+    if not is_valid:
+        result["error"] = f"安全验证失败: {error_msg}"
+        return result
+    
     if not session_path.exists():
         result["error"] = "Session does not exist"
         return result
     
-    # 记录父目录（工作目录 hash）以便后续清理
-    parent_dir = session_path.parent
+    # Windows 长路径处理
+    extended_path = get_extended_path(session_path)
+    parent_dir = extended_path.parent
     
     try:
         # shutil.rmtree 跨平台删除目录树
-        shutil.rmtree(session_path)
+        shutil.rmtree(extended_path)
         result["success"] = True
         
         # 清理空的工作目录（hash目录）

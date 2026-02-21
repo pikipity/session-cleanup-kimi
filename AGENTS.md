@@ -530,6 +530,63 @@ python scripts/get_preview.py --indices 2
 
 ---
 
+## 兼容性改进 TODO
+
+> 状态: 🔄 进行中 | ⬜ 待执行 | ✅ 已完成 | ❌ 失败
+
+### 高优先级（安全相关）
+
+| ID | 改进项 | 目标文件 | 状态 | 说明 |
+|----|--------|----------|------|------|
+| SEC-1 | **路径安全验证** | `delete_sessions.py` | ✅ | 验证路径格式、防止符号链接攻击、路径遍历防护 |
+
+**SEC-1 详细方案：**
+- 验证路径必须是绝对路径
+- 验证路径在 `~/.kimi/sessions/` 范围内
+- 检查路径格式：`sessions/<32位hex>/<session_id>`
+- 拒绝符号链接指向外部目录
+- hash 必须是 32 位十六进制字符
+
+### 中优先级（体验相关）
+
+| ID | 改进项 | 目标文件 | 状态 | 说明 |
+|----|--------|----------|------|------|
+| UX-1 | **跨年时间显示** | `list_sessions.py` | ✅ | 去年会话显示"去年"，更早显示完整年月日 |
+| UX-2 | **Windows 长路径** | `delete_sessions.py` | ✅ | 路径>240字符时添加 `\\?\` 前缀 |
+
+**UX-1 详细方案：**
+```python
+def format_time(timestamp):
+    # 今天: 09:30
+    # 昨天: 昨天 22:00
+    # 今年: 03-15
+    # 去年: 去年 12-25
+    # 更早: 2024-06-01
+```
+
+**UX-2 详细方案：**
+```python
+def get_extended_path(path: Path) -> Path:
+    if sys.platform == "win32" and len(str(path)) > 240:
+        return Path("\\\\?\\\\" + str(path.resolve()))
+    return path
+```
+
+### 低优先级（性能相关）
+
+| ID | 改进项 | 目标文件 | 状态 | 说明 |
+|----|--------|----------|------|------|
+| PERF-1 | **大文件内存优化** | `get_preview.py` | ✅ | 使用 `deque` 替代 `readlines()` |
+
+**PERF-1 详细方案：**
+```python
+from collections import deque
+# 原: lines = f.readlines()  # 载入全部
+# 新: lines = deque(f, maxlen=count*5)  # 只保留最后N行
+```
+
+---
+
 ## 最终状态
 
 | 项目 | 状态 |
@@ -539,6 +596,16 @@ python scripts/get_preview.py --indices 2
 | 边界情况 | ✅ 已处理 |
 | 跨平台 | ✅ macOS 验证通过 |
 | 安装 | ⏳ 待执行 |
+| 兼容性改进 | ✅ 已完成（见下方） |
+
+### 兼容性改进完成记录
+
+| ID | 改进项 | 状态 | 完成时间 |
+|----|--------|------|---------|
+| SEC-1 | 路径安全验证（符号链接/路径遍历防护） | ✅ | 2026-02-21 |
+| UX-1 | 跨年时间显示（去年/更早） | ✅ | 2026-02-21 |
+| UX-2 | Windows 长路径支持（>240字符） | ✅ | 2026-02-21 |
+| PERF-1 | 大文件内存优化（deque替代readlines） | ✅ | 2026-02-21 |
 
 ---
 

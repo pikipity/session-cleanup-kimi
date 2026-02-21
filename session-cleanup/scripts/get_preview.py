@@ -12,6 +12,7 @@ import json
 import argparse
 from pathlib import Path
 from datetime import datetime
+from collections import deque
 
 
 def get_kimi_dir() -> Path:
@@ -32,7 +33,7 @@ def format_time(timestamp: float) -> str:
 
 def get_last_messages(session_path: Path, count: int = 2) -> list:
     """
-    从 context.jsonl 读取最后 N 条消息
+    从 context.jsonl 读取最后 N 条消息（内存优化版）
     返回: [{"role": "user/assistant", "time": "...", "content": "..."}]
     """
     context_file = session_path / "context.jsonl"
@@ -41,52 +42,57 @@ def get_last_messages(session_path: Path, count: int = 2) -> list:
     
     messages = []
     try:
+        # 内存优化：使用 deque 只保留最后 N*5 行
+        # 假设最多有 80% 的无效行（工具消息、空行等）
+        buffer_size = count * 5
+        if buffer_size < 10:
+            buffer_size = 10
+        
         with open(context_file, 'r', encoding='utf-8', newline='') as f:
-            lines = f.readlines()
-            
-            # 从后往前取 count 条有效消息
-            taken = 0
-            for line in reversed(lines):
-                if not line.strip():
+            last_lines = deque(f, maxlen=buffer_size)
+        
+        # 从后往前解析有效消息
+        for line in reversed(last_lines):
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line)
+                role = data.get("role", "")
+                
+                if role not in ["user", "assistant"]:
                     continue
-                try:
-                    data = json.loads(line)
-                    role = data.get("role", "")
-                    content = data.get("content", "")
+                
+                content = data.get("content", "")
+                
+                # 处理 content 可能是 list 的情况
+                if isinstance(content, list):
+                    content = "[复杂内容...]"
+                elif isinstance(content, str):
+                    content = content.strip()
+                else:
+                    content = str(content)
+                
+                # 截断内容
+                if len(content) > 200:
+                    content = content[:200] + "..."
+                
+                # 获取时间（从 wire.jsonl 或文件 mtime）
+                time_str = ""
+                wire_file = session_path / "wire.jsonl"
+                if wire_file.exists():
+                    time_str = format_time(wire_file.stat().st_mtime)
+                
+                messages.insert(0, {
+                    "role": role,
+                    "time": time_str,
+                    "content": content
+                })
+                
+                if len(messages) >= count:
+                    break
                     
-                    if role not in ["user", "assistant"]:
-                        continue
-                    
-                    # 处理 content 可能是 list 的情况
-                    if isinstance(content, list):
-                        content = "[复杂内容...]"
-                    elif isinstance(content, str):
-                        content = content.strip()
-                    else:
-                        content = str(content)
-                    
-                    # 截断内容
-                    if len(content) > 200:
-                        content = content[:200] + "..."
-                    
-                    # 获取时间（从 wire.jsonl 或文件 mtime）
-                    time_str = ""
-                    wire_file = session_path / "wire.jsonl"
-                    if wire_file.exists():
-                        time_str = format_time(wire_file.stat().st_mtime)
-                    
-                    messages.insert(0, {
-                        "role": role,
-                        "time": time_str,
-                        "content": content
-                    })
-                    
-                    taken += 1
-                    if taken >= count:
-                        break
-                        
-                except json.JSONDecodeError:
-                    continue
+            except json.JSONDecodeError:
+                continue
     except Exception as e:
         return [{"role": "error", "time": "", "content": str(e)}]
     

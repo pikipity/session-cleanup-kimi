@@ -63,19 +63,34 @@ def format_size(size_bytes: int) -> str:
 
 
 def format_time(timestamp: float) -> str:
-    """格式化时间（跨平台一致）"""
+    """格式化时间（跨平台一致，智能显示年份）"""
     if timestamp == 0:
         return "未知"
     
     dt = datetime.fromtimestamp(timestamp)
     now = datetime.now()
     
+    # 今天：只显示时间
     if dt.date() == now.date():
         return dt.strftime("%H:%M")
+    
+    # 昨天：显示"昨天"
     elif (now - dt).days == 1:
         return f"昨天 {dt.strftime('%H:%M')}"
-    else:
+    
+    # 今年内：月-日
+    elif dt.year == now.year:
         return dt.strftime("%m-%d")
+    
+    # 跨年：根据距离现在的远近选择格式
+    else:
+        years_diff = now.year - dt.year
+        if years_diff == 1:
+            # 去年：显示"去年"
+            return f"去年 {dt.strftime('%m-%d')}"
+        else:
+            # 更早：显示完整年月日
+            return dt.strftime("%Y-%m-%d")
 
 
 def get_session_title(session_path: Path) -> str:
